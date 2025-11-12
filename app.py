@@ -302,11 +302,3 @@ if sampled_rows is not None and not sampled_rows.empty:
 else:
     st.info("Choose a mode, select options, then click **Generate round**.")
 
-
-    # download CSV
-    st.write("")
-    for row in final_mat_order_df.itertuples(index=False):
-        # collect details for CSV if required (lightweight)
-        pass
-    st.success("Round generated. Add this page to your Home Screen for quick access.")
-
