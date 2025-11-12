@@ -153,11 +153,7 @@ def sample_by_mix(df: pd.DataFrame, chosen_rank_key: str) -> pd.DataFrame:
 st.set_page_config(page_title="Round Builder", layout="centered")
 st.title("🍸 Round Builder (uses local Quiz Prep.xlsx)")
 
-st.sidebar.markdown("**Options**")
-rank_choice = st.sidebar.selectbox("Choose rank", ["Menu","Certified","Junior","Senior"])
-generate = st.sidebar.button("Generate round")
-
-# Load local workbook and check
+# Load the workbook once
 @st.cache_data(ttl=3600)
 def load_local_sheet(path):
     return pd.read_excel(path)
@@ -174,57 +170,112 @@ if missing:
     st.error(f"Missing required columns in {EXCEL_PATH}: {', '.join(sorted(missing))}")
     st.stop()
 
-if generate:
-    chosen_key = rank_choice.lower()
-    try:
-        sampled_rows = sample_by_mix(df, chosen_key)
-    except Exception as e:
-        st.error(str(e))
-        st.stop()
+# Sidebar controls
+st.sidebar.markdown("**Mode**")
+mode = st.sidebar.radio("Choose mode", ["Rank mix", "Custom (pick 4–6 drinks)"], index=0)
 
-    drink_to_ingredients_set = {row.Drink: parse_ingredients_cell_set(row.Ingredients)
-                                for row in sampled_rows.itertuples(index=False)}
-    drink_to_ingredients_list = {row.Drink: parse_ingredients_cell_list(row.Ingredients)
-                                 for row in sampled_rows.itertuples(index=False)}
+# Shared action button
+generate = st.sidebar.button("Generate round")
 
+# Decide how to get the working set
+sampled_rows = None
+
+if mode == "Rank mix":
+    # Rank mode like before
+    rank_choice = st.sidebar.selectbox("Choose rank", ["Menu","Certified","Junior","Senior"])
+    if generate:
+        chosen_key = rank_choice.lower()
+        try:
+            sampled_rows = sample_by_mix(df, chosen_key)
+        except Exception as e:
+            st.error(str(e))
+            st.stop()
+
+else:
+    # Custom selection mode
+    st.sidebar.markdown("**Custom selection**")
+    # Optional filter by rank to shorten the list
+    rank_filter = st.sidebar.multiselect(
+        "Filter by rank (optional)",
+        ["Menu","Certified","Junior","Senior"],
+        default=["Menu","Certified","Junior","Senior"]
+    )
+    rank_keys = {r.lower() for r in rank_filter}
+    df["RankKey"] = df["Rank"].astype(str).str.strip().str.lower()
+    df_filtered = df[df["RankKey"].isin(rank_keys)] if rank_filter else df
+
+    # Multiselect drinks
+    all_drinks = sorted(df_filtered["Drink"].dropna().astype(str).unique())
+    chosen_drinks = st.sidebar.multiselect(
+        "Select 4–6 drinks",
+        options=all_drinks
+    )
+
+    if generate:
+        if not (4 <= len(chosen_drinks) <= 6):
+            st.error("Please select between 4 and 6 drinks.")
+            st.stop()
+        sampled_rows = df[df["Drink"].astype(str).isin(chosen_drinks)].copy()
+
+# ---------- Build + display results ----------
+if sampled_rows is not None and not sampled_rows.empty:
+
+    # ---------- Ingredient parsing ----------
+    drink_to_ingredients_set = {
+        row.Drink: parse_ingredients_cell_set(row.Ingredients)
+        for row in sampled_rows.itertuples(index=False)
+    }
+    drink_to_ingredients_list = {
+        row.Drink: parse_ingredients_cell_list(row.Ingredients)
+        for row in sampled_rows.itertuples(index=False)
+    }
+
+    # ---------- Round overview ----------
     st.subheader("Your round")
     for i, row in enumerate(sampled_rows.itertuples(index=False), start=1):
         st.write(f"**{i}. {row.Drink}** — {row.Ingredients}")
 
-    # common ingredients
+    # ---------- Common ingredients ----------
     ingredient_to_drinks = {}
     for drink, ings in drink_to_ingredients_set.items():
         for ing in ings:
             ingredient_to_drinks.setdefault(ing, []).append(drink)
-    common_ingredients = {ing: drinks for ing, drinks in ingredient_to_drinks.items() if len(drinks) >= 2}
+    common_ingredients = {
+        ing: drinks for ing, drinks in ingredient_to_drinks.items() if len(drinks) >= 2
+    }
 
     st.subheader("Common ingredients")
     if common_ingredients:
-        for ing, drinks in sorted(common_ingredients.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        for ing, drinks in sorted(common_ingredients.items(),
+                                  key=lambda kv: (-len(kv[1]), kv[0])):
             st.write(f"- **{ing.capitalize()}** appears in: {', '.join(drinks)}")
     else:
         st.write("No common ingredients found between these drinks.")
     st.write("")
 
-    # mat order
+    # ---------- Mat order ----------
     sampled_rows = sampled_rows.assign(
         MethodPriority=sampled_rows["Method"].apply(get_method_priority),
         MethodComplexity=sampled_rows["Method"].apply(get_method_complexity),
     )
-    base_sorted = sampled_rows.sort_values(by=["MethodPriority", "MethodComplexity", "Drink"]).reset_index(drop=True)
+
+    base_sorted = sampled_rows.sort_values(
+        by=["MethodPriority", "MethodComplexity", "Drink"]
+    ).reset_index(drop=True)
 
     final_chunks = []
     for _, group_df in base_sorted.groupby("MethodPriority", sort=True):
         clustered = cluster_by_ingredients(group_df, drink_to_ingredients_set)
         final_chunks.append(clustered)
+
     final_mat_order_df = pd.concat(final_chunks, ignore_index=True)
 
-    st.subheader("Suggested mat order (left → right)")
+    st.subheader("Suggested mat order (Left → Right)")
     for i, row in enumerate(final_mat_order_df.itertuples(index=False), start=1):
         st.write(f"{i}. **{row.Drink}** — {row.Method}")
 
+    # ---------- Order of operations ----------
     st.subheader("Order of operations per drink")
-    details = []
     for row in final_mat_order_df.itertuples(index=False):
         ing_list   = drink_to_ingredients_list.get(row.Drink, [])
         method_str = getattr(row, "Method", "") or ""
@@ -234,13 +285,23 @@ if generate:
 
         misc, non_alc, alc, toppers = split_for_order_of_ops(ing_list, method_str)
 
-        st.markdown(f"**{row.Drink}** — Glass: _{glass_str}_ — Ice: _{ice_str}_ — Garnish: _{garnish_str}_ — Method: _{method_str}_")
+        st.markdown(
+            f"**{row.Drink}** — Glass: _{glass_str}_ — Ice: _{ice_str}_ — "
+            f"Garnish: _{garnish_str}_ — Method: _{method_str}_"
+        )
+
         def pretty(items): return ", ".join(items) if items else "—"
         st.write(f"- Misc: {pretty(misc)}")
         st.write(f"- Non-alcoholic: {pretty(non_alc)}")
         st.write(f"- Alcoholic: {pretty(alc)}")
         if toppers:
             st.write(f"- Top (last): {pretty(toppers)}")
+
+    st.success("Round generated. ✅")
+
+else:
+    st.info("Choose a mode, select options, then click **Generate round**.")
+
 
     # download CSV
     st.write("")
