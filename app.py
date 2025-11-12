@@ -234,25 +234,6 @@ if sampled_rows is not None and not sampled_rows.empty:
     st.subheader("Your round")
     for i, row in enumerate(sampled_rows.itertuples(index=False), start=1):
         st.write(f"**{i}. {row.Drink}** — {row.Ingredients}")
-
-    # ---------- Common ingredients ----------
-    ingredient_to_drinks = {}
-    for drink, ings in drink_to_ingredients_set.items():
-        for ing in ings:
-            ingredient_to_drinks.setdefault(ing, []).append(drink)
-    common_ingredients = {
-        ing: drinks for ing, drinks in ingredient_to_drinks.items() if len(drinks) >= 2
-    }
-
-    st.subheader("Common ingredients")
-    if common_ingredients:
-        for ing, drinks in sorted(common_ingredients.items(),
-                                  key=lambda kv: (-len(kv[1]), kv[0])):
-            st.write(f"- **{ing.capitalize()}** appears in: {', '.join(drinks)}")
-    else:
-        st.write("No common ingredients found between these drinks.")
-    st.write("")
-
     # ---------- Mat order ----------
     sampled_rows = sampled_rows.assign(
         MethodPriority=sampled_rows["Method"].apply(get_method_priority),
@@ -273,6 +254,24 @@ if sampled_rows is not None and not sampled_rows.empty:
     st.subheader("Suggested mat order (Left → Right)")
     for i, row in enumerate(final_mat_order_df.itertuples(index=False), start=1):
         st.write(f"{i}. **{row.Drink}** — {row.Method}")
+        
+    # ---------- Common ingredients ----------
+    ingredient_to_drinks = {}
+    for drink, ings in drink_to_ingredients_set.items():
+        for ing in ings:
+            ingredient_to_drinks.setdefault(ing, []).append(drink)
+    common_ingredients = {
+        ing: drinks for ing, drinks in ingredient_to_drinks.items() if len(drinks) >= 2
+    }
+
+    st.subheader("Common ingredients")
+    if common_ingredients:
+        for ing, drinks in sorted(common_ingredients.items(),
+                                  key=lambda kv: (-len(kv[1]), kv[0])):
+            st.write(f"- **{ing.capitalize()}** appears in: {', '.join(drinks)}")
+    else:
+        st.write("No common ingredients found between these drinks.")
+    st.write("")
 
     # ---------- Order of operations ----------
     st.subheader("Order of operations per drink")
