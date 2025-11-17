@@ -277,7 +277,7 @@ if missing:
 
 # Sidebar controls
 st.sidebar.markdown("**Mode**")
-mode = st.sidebar.radio("Choose mode", ["Rank mix", "Custom (pick 4–6 drinks)"], index=0)
+mode = st.sidebar.radio("Choose mode", ["Rank mix", "Custom (pick 4–10 drinks)"], index=0)
 
 # Shared action button
 generate = st.sidebar.button("Generate round")
