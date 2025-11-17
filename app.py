@@ -135,12 +135,7 @@ def cluster_by_ingredients(rows_in_same_method: pd.DataFrame, drink_to_ingredien
 def normalize_rank(s: str) -> str:
     return str(s).strip().lower()
 
-import random
-import re
-
-# --- Helpers to detect categories from drink names / methods ---
-MARTINI_EXCLUDE = ("espresso", "pornstar", "french", "left bank", "detroit")  # expand if needed
-# classic martini variants, e.g. "Dry Gin Martini", "Dirty Vodka Martini", etc.
+MARTINI_EXCLUDE = ("espresso", "pornstar", "chocolate")  # expand if needed
 MARTINI_VARIANTS_RE = re.compile(
     r"(?:(?:\b(dry|dirty|wet|filthy)\b.*\bmartini\b)|(?:\b(gin|vodka)\s+martini\b)|(?:\bmartini\b.*\b(dry|dirty|wet|filthy)\b))",
     flags=re.IGNORECASE
@@ -153,23 +148,32 @@ def is_manhattan(name: str) -> bool:
     return isinstance(name, str) and ("manhattan" in name.lower())
 
 def is_classic_martini(name: str) -> bool:
-    if not isinstance(name, str):
-        return False
+    if not isinstance(name, str): return False
     n = name.lower()
-    if any(bad in n for bad in MARTINI_EXCLUDE):
-        return False
+    if any(bad in n for bad in MARTINI_EXCLUDE): return False
     return bool(MARTINI_VARIANTS_RE.search(n))
 
 def is_vesper(name: str) -> bool:
     return isinstance(name, str) and ("vesper" in name.lower())
 
+def shaken_bounds_for_mode(mode_key: str) -> tuple[int, int]:
+    # (min_shaken, max_shaken)
+    if mode_key == "menu":
+        return (0, 2)
+    if mode_key in ("certified", "junior"):
+        return (1, 2)
+    if mode_key == "senior":
+        return (2, 2)  # exactly 2
+    return (0, 2)
+
 def _passes_constraints(df_choice: pd.DataFrame, mode_key: str) -> bool:
-    # Global: no more than 2 shaken
+    # shaken bounds
+    lo, hi = shaken_bounds_for_mode(mode_key)
     shaken_count = sum(is_shaken(m) for m in df_choice["Method"].astype(str))
-    if shaken_count > 2:
+    if not (lo <= shaken_count <= hi):
         return False
 
-    # Only enforce the name-family constraints for non-menu rounds
+    # name-family constraints for non-menu modes
     if mode_key != "menu":
         names = df_choice["Drink"].astype(str).tolist()
         manhattan_count = sum(is_manhattan(n) for n in names)
@@ -178,25 +182,23 @@ def _passes_constraints(df_choice: pd.DataFrame, mode_key: str) -> bool:
 
         martini_count = sum(is_classic_martini(n) for n in names)
         vesper_count = sum(is_vesper(n) for n in names)
-
-        # at most one from the union of {classic martini variants} ∪ {vesper}
-        if (martini_count + vesper_count) > 1:
+        if (martini_count + vesper_count) > 1:  # at most one from martini-variants ∪ vesper
             return False
 
     return True
 
-def sample_by_mix(df: pd.DataFrame, chosen_rank_key: str, max_tries: int = 2000) -> pd.DataFrame:
+def sample_by_mix(df: pd.DataFrame, chosen_rank_key: str, max_tries: int = 3000) -> pd.DataFrame:
     """
-    Pick drinks per MIX_RULES for the chosen rank, subject to constraints:
-      - ≤2 shaken across the whole round (all modes)
-      - (non-menu modes) ≤1 'manhattan'
-      - (non-menu modes) ≤1 from {classic martini variants, vesper}
-    Tries up to max_tries random combinations; raises with a clear message if infeasible.
+    Pick drinks per MIX_RULES for the chosen rank, with constraints:
+      - Global: ≤ 2 shaken
+      - Certified/Junior: ≥ 1 shaken
+      - Senior: exactly 2 shaken
+      - (non-menu): ≤ 1 'manhattan'
+      - (non-menu): ≤ 1 from {classic martini variants, vesper}
     """
     if chosen_rank_key not in MIX_RULES:
         raise ValueError(f"Unknown rank: {chosen_rank_key}")
 
-    # Precompute pools by bucket
     base = df.dropna(subset=["Drink"]).copy()
     base["RankKey"] = base["Rank"].astype(str).str.strip().str.lower()
 
@@ -208,38 +210,49 @@ def sample_by_mix(df: pd.DataFrame, chosen_rank_key: str, max_tries: int = 2000)
             raise ValueError(f"Not enough drinks for bucket '{bucket.title()}': need {need}, have {len(pool)}.")
         pools[bucket] = pool
 
-    # Fast reject if total feasible shaken limit is impossible (optional heuristic)
-    # e.g., if every item in every pool is shaken and total needed > 2
-    total_needed = sum(required.values())
-    total_min_non_shake = sum(max(0, len(pools[b]) - sum(is_shaken(m) for m in pools[b]["Method"].astype(str))) for b in pools)
-    # This heuristic is conservative; we rely on randomized search anyway.
+    # Quick feasibility diagnostics for shaken bounds
+    lo, hi = shaken_bounds_for_mode(chosen_rank_key)
+    shaken_possible_max = sum(min(need, int(pool["Method"].astype(str).str.contains("shake", case=False).sum()))
+                              for bucket, (pool, need) in zip(pools.keys(), [(pools[b], required[b]) for b in pools]))
+    non_shaken_counts = {b: int((~pools[b]["Method"].astype(str).str.contains("shake", case=False)).sum()) for b in pools}
+    shaken_needed_min = sum(max(0, required[b] - non_shaken_counts[b]) for b in pools)  # min shaken we must take
+    # If impossible w.r.t. min/max shaken, we skip randomized search and raise clearer error
+    if shaken_possible_max < lo or shaken_needed_min > hi:
+        diag = []
+        for b in pools:
+            pool = pools[b]
+            sh = int(pool["Method"].astype(str).str.contains("shake", case=False).sum())
+            diag.append(f"{b.title()}: pool={len(pool)} shaken={sh} need={required[b]}")
+        raise ValueError(
+            "Shaken constraints infeasible with current pools.\n"
+            f"Mode: {chosen_rank_key} requires shaken in [{lo}, {hi}].\n"
+            f"Max shaken possible: {shaken_possible_max}; Min shaken forced: {shaken_needed_min}.\n"
+            "Per-bucket: \n  " + "\n  ".join(diag)
+        )
 
-    # Randomized search with bounded retries (small rounds → fast)
+    # Randomized search
     for _ in range(max_tries):
         picks = []
         for bucket, need in required.items():
             picks.append(pools[bucket].sample(n=need, replace=False))
         choice = pd.concat(picks, ignore_index=True)
-
         if _passes_constraints(choice, chosen_rank_key):
             return choice
 
-    # If we get here, likely infeasible with current constraints/data
-    # Provide diagnostics
+    # If not found, raise with helpful diagnostics
     diag = []
-    # Count shaken availability
-    for bucket, pool in pools.items():
-        shaken_in_pool = sum(is_shaken(m) for m in pool["Method"].astype(str))
-        diag.append(f"{bucket.title()}: {len(pool)} items ({shaken_in_pool} shaken) need {required[bucket]}")
+    for b in pools:
+        pool = pools[b]
+        sh = int(pool["Method"].astype(str).str.contains("shake", case=False).sum())
+        diag.append(f"{b.title()}: pool={len(pool)} shaken={sh} need={required[b]}")
     raise ValueError(
-        "Could not find a combination that satisfies all constraints after "
-        f"{max_tries} tries.\n"
-        "Tips:\n"
-        "- Reduce the number of shaken drinks in your pools or relax the ≤2 shaken rule.\n"
-        "- Ensure there aren't too many 'Manhattan' or classic martini/vesper entries per mode.\n"
-        "- Details:\n  " + "\n  ".join(diag)
+        "Could not find a combination that satisfies all constraints.\n"
+        f"Tried {max_tries} random samples.\n"
+        f"Mode '{chosen_rank_key}' needs shaken in [{lo}, {hi}].\n"
+        "Per-bucket: \n  " + "\n  ".join(diag) + "\n"
+        "Tips: add more non-shaken items (if hi exceeded), or more shaken items (if lo unmet), "
+        "and ensure not too many Manhattans/Martini variants or a Vesper clash."
     )
-
 
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="Round Builder", layout="centered")
