@@ -312,12 +312,12 @@ else:
     # Multiselect drinks
     all_drinks = sorted(df_filtered["Drink"].dropna().astype(str).unique())
     chosen_drinks = st.sidebar.multiselect(
-        "Select 4–6 drinks",
+        "Select 4–10 drinks",
         options=all_drinks
     )
 
     if generate:
-        if not (4 <= len(chosen_drinks) <= 6):
+        if not (4 <= len(chosen_drinks) <= 10):
             st.error("Please select between 4 and 6 drinks.")
             st.stop()
         sampled_rows = df[df["Drink"].astype(str).isin(chosen_drinks)].copy()
