@@ -198,7 +198,7 @@ def sample_by_mix(df: pd.DataFrame, chosen_rank_key: str, max_tries: int = 2000)
 
     # Precompute pools by bucket
     base = df.dropna(subset=["Drink"]).copy()
-    base["RankKey"] = base["Rank"].astype(str).strip().str.lower()
+    base["RankKey"] = base["Rank"].astype(str).str.strip().str.lower()
 
     required = MIX_RULES[chosen_rank_key]
     pools = {}
