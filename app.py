@@ -295,7 +295,7 @@ if missing:
 
 # Sidebar controls
 st.sidebar.markdown("**Mode**")
-mode = st.sidebar.radio("Choose mode", ["Rank mix", "Custom (pick 4–6 drinks)"], index=0)
+mode = st.sidebar.radio("Choose mode", ["Rank mix", "Custom (pick 4–10 drinks)"], index=0)
 
 # Shared action button
 generate = st.sidebar.button("Generate round")
@@ -320,8 +320,8 @@ else:
     # Optional filter by rank to shorten the list
     rank_filter = st.sidebar.multiselect(
         "Filter by rank (optional)",
-        ["Menu","Certified","Junior","Senior"],
-        default=["Menu","Certified","Junior","Senior"]
+        ["Menu", "Certified", "Junior", "Senior"],
+        default=["Menu", "Certified", "Junior", "Senior"],
     )
     rank_keys = {r.lower() for r in rank_filter}
     df["RankKey"] = df["Rank"].astype(str).str.strip().str.lower()
@@ -330,15 +330,20 @@ else:
     # Multiselect drinks
     all_drinks = sorted(df_filtered["Drink"].dropna().astype(str).unique())
     chosen_drinks = st.sidebar.multiselect(
-        "Select 4–6 drinks",
-        options=all_drinks
+        "Select 4–10 drinks",
+        options=all_drinks,
     )
 
+    # Deduplicate choices while preserving the order the user clicked
+    unique_chosen_drinks = list(dict.fromkeys(chosen_drinks))
+
     if generate:
-        if not (4 <= len(chosen_drinks) <= 6):
-            st.error("Please select between 4 and 6 drinks.")
+        if not (4 <= len(unique_chosen_drinks) <= 10):
+            st.error("Please select between 4 and 10 drinks.")
             st.stop()
-        sampled_rows = df[df["Drink"].astype(str).isin(chosen_drinks)].copy()
+
+        # Use the de-duplicated list to build the sampled rows
+        sampled_rows = df[df["Drink"].astype(str).isin(unique_chosen_drinks)].copy()
 
 # ---------- Build + display results ----------
 if sampled_rows is not None and not sampled_rows.empty:
